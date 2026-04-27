@@ -1,0 +1,21 @@
+{
+  "name": "rn-ci-setup",
+  "version": "1.0.0",
+  "description": "CLI to scaffold React Native CI/CD with Fastlane and GitHub Actions",
+  "main": "bin/index.js",
+  "bin": {
+    "rn-ci-setup": "./bin/index.js"
+  },
+  "scripts": {
+    "start": "node ./bin/index.js",
+    "init": "node ./bin/index.js init",
+    "doctor": "node ./bin/index.js doctor"
+  },
+  "keywords": [],
+  "author": "Faraz",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "inquirer": "^13.4.2"
+  }
+}

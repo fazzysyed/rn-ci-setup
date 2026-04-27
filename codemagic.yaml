@@ -1,0 +1,15 @@
+workflows:
+  react_native_ci:
+    name: React Native CI
+    max_build_duration: 120
+    environment:
+      node: 20
+      xcode: latest
+    scripts:
+      - name: Install deps
+        script: cd . && npm ci
+      - name: Build iOS
+        script: cd ./ios && pod install && xcodebuild -workspace *.xcworkspace -scheme ${IOS_SCHEME:-App} -sdk iphonesimulator -configuration Release build
+    artifacts:
+      - android/app/build/outputs/**/*.apk
+      - android/app/build/outputs/**/*.aab

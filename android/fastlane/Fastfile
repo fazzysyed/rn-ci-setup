@@ -1,0 +1,18 @@
+default_platform(:android)
+
+platform :android do
+  desc "Build Android release APK"
+  lane :beta do
+    gradle(task: "assembleRelease")
+  end
+  desc "Deploy to Firebase App Distribution"
+  lane :firebase do
+    gradle(task: "assembleRelease")
+    firebase_app_distribution(
+      app: ENV["FIREBASE_ANDROID_APP_ID"],
+      testers: ENV["FIREBASE_TESTERS"],
+      release_notes: ENV["RELEASE_NOTES"] || "Automated build from CI",
+      apk_path: "app/build/outputs/apk/release/app-release.apk"
+    )
+  end
+end

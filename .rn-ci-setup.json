@@ -1,0 +1,15 @@
+{
+  "version": 3,
+  "appPath": ".",
+  "template": "bare",
+  "ciProvider": "codemagic",
+  "targets": {
+    "android": false,
+    "ios": true
+  },
+  "deploy": {
+    "firebase": false,
+    "playStore": false,
+    "testFlight": true
+  }
+}

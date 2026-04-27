@@ -1,0 +1,40 @@
+name: iOS CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install deps
+        run: npm ci
+        working-directory: .
+      - name: Install Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.2"
+      - name: Expo prebuild (iOS)
+        run: npx expo prebuild --platform ios --non-interactive
+        working-directory: .
+
+      - name: Install CocoaPods
+        run: pod install
+        working-directory: ./ios
+      - name: Build iOS
+        run: xcodebuild -workspace *.xcworkspace -scheme ${IOS_SCHEME:-App} -sdk iphonesimulator -configuration Release build
+        working-directory: ./ios
+      - name: Deploy to TestFlight
+        run: bundle exec fastlane ios testflight
+        working-directory: ./ios
+

@@ -1,0 +1,17 @@
+format_version: '11'
+default_step_lib_source: https://github.com/bitrise-io/bitrise-steplib.git
+project_type: react-native
+workflows:
+  primary:
+    steps:
+      - activate-ssh-key@4: {}
+      - git-clone@8: {}
+      - npm@1:
+          inputs:
+            - command: ci
+      - script@1:
+          title: Build Android release
+          inputs: ["content: |\n              cd android && ./gradlew assembleRelease"]
+      - script@1:
+          title: Build iOS
+          inputs: ["content: |\n              cd ios && pod install && xcodebuild -workspace *.xcworkspace -scheme ${IOS_SCHEME:-App} -sdk iphonesimulator -configuration Release build"]
