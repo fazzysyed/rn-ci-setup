@@ -74,3 +74,23 @@ npm install
 npm run init -- --android --ios
 npm run doctor
 ```
+
+## Publish automation
+
+This repo can publish to both registries from GitHub Actions:
+
+- npm: `rn-ci-setup`
+- GitHub Packages: `@fazzysyed/rn-ci-setup`
+
+Workflow file: `.github/workflows/publish.yml`
+
+Required secret:
+
+- `NPM_TOKEN` (from npm access tokens with publish permission)
+
+How to release:
+
+1. Bump version in `package.json` (or use `npm version patch|minor|major`)
+2. Push commit and tag
+3. Create/publish a GitHub Release for that tag
+4. Workflow publishes to npm and GitHub Packages automatically
