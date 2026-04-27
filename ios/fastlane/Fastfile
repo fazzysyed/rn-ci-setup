@@ -1,19 +1,27 @@
 default_platform(:ios)
 
 platform :ios do
-  desc "Build iOS app"
-  lane :beta do
+  desc "Sync signing certificates and profiles"
+  lane :match do
+    match(type: "appstore", readonly: true)
+  end
+
+  desc "Build development/TestFlight-ready iOS app"
+  lane :development do
     build_app(
-      workspace: ENV["IOS_WORKSPACE"] || "ios/App.xcworkspace",
-      scheme: ENV["IOS_SCHEME"] || "App"
+      workspace: ENV["IOS_WORKSPACE"] || "App.xcworkspace",
+      scheme: ENV["IOS_SCHEME"] || "App",
+      export_method: "app-store"
     )
   end
-  desc "Upload to TestFlight"
-  lane :testflight do
+
+  desc "Build and upload to App Store Connect"
+  lane :appstore do
     build_app(
-      workspace: ENV["IOS_WORKSPACE"] || "ios/App.xcworkspace",
-      scheme: ENV["IOS_SCHEME"] || "App"
+      workspace: ENV["IOS_WORKSPACE"] || "App.xcworkspace",
+      scheme: ENV["IOS_SCHEME"] || "App",
+      export_method: "app-store"
     )
-    upload_to_testflight
+    upload_to_app_store
   end
 end

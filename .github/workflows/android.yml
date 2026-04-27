@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, closed]
 
 jobs:
   build:
@@ -28,3 +29,51 @@ jobs:
       - name: Build Android release
         run: ./gradlew assembleRelease
         working-directory: ./android
+
+
+  notify:
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: always()
+    steps:
+      - name: Notify Slack
+        if: ${{ secrets.SLACK_WEBHOOK_URL != '' }}
+        run: |
+          curl -X POST -H "Content-Type: application/json" --data "{\"text\":\"rn-ci-setup | ${GITHUB_REPOSITORY} | workflow=${GITHUB_WORKFLOW} | event=${GITHUB_EVENT_NAME} | ref=${GITHUB_REF_NAME} | status=${{ needs.build.result }}\"}" "$SLACK_WEBHOOK_URL"
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      - name: Notify Discord
+        if: ${{ secrets.DISCORD_WEBHOOK_URL != '' }}
+        run: |
+          curl -X POST -H "Content-Type: application/json" --data "{\"content\":\"rn-ci-setup | ${GITHUB_REPOSITORY} | workflow=${GITHUB_WORKFLOW} | event=${GITHUB_EVENT_NAME} | ref=${GITHUB_REF_NAME} | status=${{ needs.build.result }}\"}" "$DISCORD_WEBHOOK_URL"
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      - name: Notify Microsoft Teams
+        if: ${{ secrets.TEAMS_WEBHOOK_URL != '' }}
+        run: |
+          curl -X POST -H "Content-Type: application/json" --data "{\"text\":\"rn-ci-setup | ${GITHUB_REPOSITORY} | workflow=${GITHUB_WORKFLOW} | event=${GITHUB_EVENT_NAME} | ref=${GITHUB_REF_NAME} | status=${{ needs.build.result }}\"}" "$TEAMS_WEBHOOK_URL"
+        env:
+          TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+
+  notify_pr_merged:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true
+    steps:
+      - name: Notify Slack PR merged
+        if: ${{ secrets.SLACK_WEBHOOK_URL != '' }}
+        run: |
+          curl -X POST -H "Content-Type: application/json" --data "{\"text\":\"rn-ci-setup | ${GITHUB_REPOSITORY} | PR merged #${{ github.event.pull_request.number }} - ${{ github.event.pull_request.title }}\"}" "$SLACK_WEBHOOK_URL"
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      - name: Notify Discord PR merged
+        if: ${{ secrets.DISCORD_WEBHOOK_URL != '' }}
+        run: |
+          curl -X POST -H "Content-Type: application/json" --data "{\"content\":\"rn-ci-setup | ${GITHUB_REPOSITORY} | PR merged #${{ github.event.pull_request.number }} - ${{ github.event.pull_request.title }}\"}" "$DISCORD_WEBHOOK_URL"
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      - name: Notify Teams PR merged
+        if: ${{ secrets.TEAMS_WEBHOOK_URL != '' }}
+        run: |
+          curl -X POST -H "Content-Type: application/json" --data "{\"text\":\"rn-ci-setup | ${GITHUB_REPOSITORY} | PR merged #${{ github.event.pull_request.number }} - ${{ github.event.pull_request.title }}\"}" "$TEAMS_WEBHOOK_URL"
+        env:
+          TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}

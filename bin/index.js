@@ -93,6 +93,85 @@ function getBashCdPrefix(wd) {
   return wd === "." ? "" : `cd ${wd} && `;
 }
 
+function getNotificationJobs(options) {
+  if (options.ciProvider !== "github") return "";
+  if (!options.notifications?.slack && !options.notifications?.discord && !options.notifications?.teams) return "";
+
+  const eventMessage = "rn-ci-setup | ${GITHUB_REPOSITORY} | workflow=${GITHUB_WORKFLOW} | event=${GITHUB_EVENT_NAME} | ref=${GITHUB_REF_NAME} | status=${{ needs.build.result }}";
+  const mergeMessage = "rn-ci-setup | ${GITHUB_REPOSITORY} | PR merged #${{ github.event.pull_request.number }} - ${{ github.event.pull_request.title }}";
+
+  const lines = [
+    "",
+    "  notify:",
+    "    runs-on: ubuntu-latest",
+    "    needs: [build]",
+    "    if: always()",
+    "    steps:"
+  ];
+
+  if (options.notifications.slack) {
+    lines.push("      - name: Notify Slack");
+    lines.push("        if: ${{ secrets.SLACK_WEBHOOK_URL != '' }}");
+    lines.push("        run: |");
+    lines.push(`          curl -X POST -H "Content-Type: application/json" --data "{\\\"text\\\":\\\"${eventMessage}\\\"}" "$SLACK_WEBHOOK_URL"`);
+    lines.push("        env:");
+    lines.push("          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}");
+  }
+
+  if (options.notifications.discord) {
+    lines.push("      - name: Notify Discord");
+    lines.push("        if: ${{ secrets.DISCORD_WEBHOOK_URL != '' }}");
+    lines.push("        run: |");
+    lines.push(`          curl -X POST -H "Content-Type: application/json" --data "{\\\"content\\\":\\\"${eventMessage}\\\"}" "$DISCORD_WEBHOOK_URL"`);
+    lines.push("        env:");
+    lines.push("          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}");
+  }
+
+  if (options.notifications.teams) {
+    lines.push("      - name: Notify Microsoft Teams");
+    lines.push("        if: ${{ secrets.TEAMS_WEBHOOK_URL != '' }}");
+    lines.push("        run: |");
+    lines.push(`          curl -X POST -H "Content-Type: application/json" --data "{\\\"text\\\":\\\"${eventMessage}\\\"}" "$TEAMS_WEBHOOK_URL"`);
+    lines.push("        env:");
+    lines.push("          TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}");
+  }
+
+  lines.push("");
+  lines.push("  notify_pr_merged:");
+  lines.push("    runs-on: ubuntu-latest");
+  lines.push("    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true");
+  lines.push("    steps:");
+
+  if (options.notifications.slack) {
+    lines.push("      - name: Notify Slack PR merged");
+    lines.push("        if: ${{ secrets.SLACK_WEBHOOK_URL != '' }}");
+    lines.push("        run: |");
+    lines.push(`          curl -X POST -H "Content-Type: application/json" --data "{\\\"text\\\":\\\"${mergeMessage}\\\"}" "$SLACK_WEBHOOK_URL"`);
+    lines.push("        env:");
+    lines.push("          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}");
+  }
+
+  if (options.notifications.discord) {
+    lines.push("      - name: Notify Discord PR merged");
+    lines.push("        if: ${{ secrets.DISCORD_WEBHOOK_URL != '' }}");
+    lines.push("        run: |");
+    lines.push(`          curl -X POST -H "Content-Type: application/json" --data "{\\\"content\\\":\\\"${mergeMessage}\\\"}" "$DISCORD_WEBHOOK_URL"`);
+    lines.push("        env:");
+    lines.push("          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}");
+  }
+
+  if (options.notifications.teams) {
+    lines.push("      - name: Notify Teams PR merged");
+    lines.push("        if: ${{ secrets.TEAMS_WEBHOOK_URL != '' }}");
+    lines.push("        run: |");
+    lines.push(`          curl -X POST -H "Content-Type: application/json" --data "{\\\"text\\\":\\\"${mergeMessage}\\\"}" "$TEAMS_WEBHOOK_URL"`);
+    lines.push("        env:");
+    lines.push("          TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}");
+  }
+
+  return `\n${lines.join("\n")}\n`;
+}
+
 function getAndroidWorkflow(options) {
   const wd = getRelativeWorkDir(options.targetRoot);
   const expoPrebuild = options.template === "expo"
@@ -106,6 +185,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, closed]
 
 jobs:
   build:
@@ -129,7 +209,7 @@ jobs:
       - name: Build Android release
         run: ./gradlew assembleRelease
         working-directory: ${wd}/android
-`;
+${getNotificationJobs(options)}`;
 }
 
 function getIosWorkflow(options) {
@@ -144,6 +224,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, closed]
 
 jobs:
   build:
@@ -163,12 +244,76 @@ jobs:
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.2"${expoPrebuild}
+      - name: Install gems
+        run: bundle install
+        working-directory: ${wd}
       - name: Install CocoaPods
         run: pod install
         working-directory: ${wd}/ios
+      - name: Fastlane match
+        run: cd ios && bundle exec fastlane match
+        working-directory: ${wd}
+      - name: Fastlane development
+        run: cd ios && bundle exec fastlane development
+        working-directory: ${wd}
       - name: Build iOS
         run: xcodebuild -workspace *.xcworkspace -scheme \${IOS_SCHEME:-App} -sdk iphonesimulator -configuration Release build
         working-directory: ${wd}/ios
+${getNotificationJobs(options)}`;
+}
+
+function getRootGemfile() {
+  return `source "https://rubygems.org"
+
+gem "fastlane"
+`;
+}
+
+function getIosFastfile() {
+  return `default_platform(:ios)
+
+platform :ios do
+  desc "Sync signing certificates and profiles"
+  lane :match do
+    match(type: "appstore", readonly: true)
+  end
+
+  desc "Build development/TestFlight-ready iOS app"
+  lane :development do
+    build_app(
+      workspace: ENV["IOS_WORKSPACE"] || "App.xcworkspace",
+      scheme: ENV["IOS_SCHEME"] || "App",
+      export_method: "app-store"
+    )
+  end
+
+  desc "Build and upload to App Store Connect"
+  lane :appstore do
+    build_app(
+      workspace: ENV["IOS_WORKSPACE"] || "App.xcworkspace",
+      scheme: ENV["IOS_SCHEME"] || "App",
+      export_method: "app-store"
+    )
+    upload_to_app_store
+  end
+end
+`;
+}
+
+function getIosAppfile() {
+  return `app_identifier(ENV["APPLE_APP_IDENTIFIER"])
+apple_id(ENV["APPLE_ID"])
+itc_team_id(ENV["APP_STORE_CONNECT_TEAM_ID"])
+team_id(ENV["APPLE_TEAM_ID"])
+`;
+}
+
+function getIosMatchfile() {
+  return `git_url(ENV["MATCH_GIT_URL"])
+storage_mode("git")
+type("appstore")
+app_identifier([ENV["APPLE_APP_IDENTIFIER"]])
+username(ENV["APPLE_ID"])
 `;
 }
 
@@ -270,8 +415,22 @@ function getSecretsChecklist(options) {
 
   if (options.targets.ios) {
     recommended.push("IOS_SCHEME", "IOS_WORKSPACE");
-    required.push("APPLE_API_KEY_ID", "APPLE_API_ISSUER_ID", "APPLE_API_KEY_BASE64");
+    required.push(
+      "APPLE_API_KEY_ID",
+      "APPLE_API_ISSUER_ID",
+      "APPLE_API_KEY_BASE64",
+      "APPLE_ID",
+      "APPLE_TEAM_ID",
+      "APP_STORE_CONNECT_TEAM_ID",
+      "APPLE_APP_IDENTIFIER",
+      "MATCH_GIT_URL",
+      "MATCH_PASSWORD"
+    );
   }
+
+  if (options.notifications?.slack) required.push("SLACK_WEBHOOK_URL");
+  if (options.notifications?.discord) required.push("DISCORD_WEBHOOK_URL");
+  if (options.notifications?.teams) required.push("TEAMS_WEBHOOK_URL");
 
   return { required, recommended };
 }
@@ -285,6 +444,9 @@ function getEnvExample(options) {
   if (options.targets.ios) {
     lines.push("# iOS", "IOS_SCHEME=App", "IOS_WORKSPACE=ios/App.xcworkspace");
     lines.push("APPLE_API_KEY_ID=", "APPLE_API_ISSUER_ID=", "APPLE_API_KEY_BASE64=");
+    lines.push("APPLE_ID=", "APPLE_TEAM_ID=", "APP_STORE_CONNECT_TEAM_ID=");
+    lines.push("APPLE_APP_IDENTIFIER=com.example.app");
+    lines.push("MATCH_GIT_URL=", "MATCH_PASSWORD=");
     lines.push("");
   }
   return `${lines.join("\n")}\n`;
@@ -388,6 +550,37 @@ async function resolveCiProvider() {
   return answers.ciProvider;
 }
 
+async function resolveNotifications() {
+  const fromFlags = {
+    slack: hasFlag("notify-slack"),
+    discord: hasFlag("notify-discord"),
+    teams: hasFlag("notify-teams")
+  };
+
+  if (fromFlags.slack || fromFlags.discord || fromFlags.teams) {
+    return fromFlags;
+  }
+
+  const answers = await inquirer.prompt([
+    {
+      type: "checkbox",
+      name: "channels",
+      message: "Add notification channels for push/PR merge/build status?",
+      choices: [
+        { name: "Slack", value: "slack" },
+        { name: "Discord", value: "discord" },
+        { name: "Microsoft Teams", value: "teams" }
+      ]
+    }
+  ]);
+
+  return {
+    slack: answers.channels.includes("slack"),
+    discord: answers.channels.includes("discord"),
+    teams: answers.channels.includes("teams")
+  };
+}
+
 function validateAppPath(cwd, appPath, targets) {
   const root = path.join(cwd, appPath);
   if (targets.android && !fs.existsSync(path.join(root, "android"))) throw new Error(`Selected app path "${appPath}" does not contain android/`);
@@ -413,10 +606,23 @@ function writeScaffold(options) {
   writeFileSafe(path.join(options.targetRoot, ".env.example"), getEnvExample(options));
   writeFileSafe(path.join(options.targetRoot, ".env.production"), getEnvProduction(options));
   writeFileSafe(path.join(options.targetRoot, "docs/github-secrets.md"), getSecretsGuide(options));
+  if (options.targets.ios) {
+    writeFileSafe(path.join(options.targetRoot, "Gemfile"), getRootGemfile());
+    writeFileSafe(path.join(options.targetRoot, "ios/fastlane/Fastfile"), getIosFastfile());
+    writeFileSafe(path.join(options.targetRoot, "ios/fastlane/Appfile"), getIosAppfile());
+    writeFileSafe(path.join(options.targetRoot, "ios/fastlane/Matchfile"), getIosMatchfile());
+  }
   writeFileSafe(
     path.join(options.targetRoot, CONFIG_FILE),
     `${JSON.stringify(
-      { version: 4, appPath: options.appPath, template: options.template, ciProvider: options.ciProvider, targets: options.targets },
+      {
+        version: 5,
+        appPath: options.appPath,
+        template: options.template,
+        ciProvider: options.ciProvider,
+        targets: options.targets,
+        notifications: options.notifications
+      },
       null,
       2
     )}\n`
@@ -430,12 +636,17 @@ async function runInit() {
   const targets = await resolveTargets();
   validateAppPath(cwd, appPath, targets);
   const template = await resolveTemplate();
-  const options = { appPath, targetRoot: path.join(cwd, appPath), ciProvider, template, targets };
+  const notifications = await resolveNotifications();
+  const options = { appPath, targetRoot: path.join(cwd, appPath), ciProvider, template, targets, notifications };
   writeScaffold(options);
   console.log("\nSetup complete.");
   console.log(`App path: ${appPath}`);
   console.log(`CI provider: ${ciProvider}`);
   console.log(`Template: ${template}`);
+  if (notifications.slack || notifications.discord || notifications.teams) {
+    const channels = ["slack", "discord", "teams"].filter((channel) => notifications[channel]).join(", ");
+    console.log(`Notifications: ${channels}`);
+  }
   console.log("Suggested next steps:");
   console.log("1) Review generated CI files");
   console.log("2) Add secrets listed in docs/github-secrets.md");
@@ -471,14 +682,16 @@ function getDoctorOptions(cwd) {
       appPath: ".",
       template: "bare",
       ciProvider: "github",
-      targets: { android: fs.existsSync(path.join(cwd, "android")), ios: fs.existsSync(path.join(cwd, "ios")) }
+      targets: { android: fs.existsSync(path.join(cwd, "android")), ios: fs.existsSync(path.join(cwd, "ios")) },
+      notifications: { slack: false, discord: false, teams: false }
     };
   return {
     appPath: config.appPath,
     targetRoot: cwd,
     template: config.template,
     ciProvider: config.ciProvider || "github",
-    targets: config.targets
+    targets: config.targets,
+    notifications: config.notifications || { slack: false, discord: false, teams: false }
   };
 }
 
@@ -545,12 +758,12 @@ function printHelp() {
   console.log(`rn-ci-setup CLI
 
 Usage:
-  rn-ci-setup init [--ci-provider <github|bitrise|codemagic>] [--android] [--ios] [--expo|--bare] [--app-path <path>]
+  rn-ci-setup init [--ci-provider <github|bitrise|codemagic>] [--android] [--ios] [--expo|--bare] [--notify-slack] [--notify-discord] [--notify-teams] [--app-path <path>]
   rn-ci-setup secrets [--repo <owner/name>]
   rn-ci-setup doctor
 
 Examples:
-  npx rn-ci-setup init --ci-provider github --android --ios
+  npx rn-ci-setup init --ci-provider github --android --ios --notify-slack --notify-teams
   npx rn-ci-setup init --ci-provider bitrise --android --ios
   npx rn-ci-setup init --ci-provider codemagic --ios --app-path apps/mobile
   npx rn-ci-setup secrets
