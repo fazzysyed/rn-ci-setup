@@ -1,6 +1,20 @@
 # rn-ci-setup
 
+[![npm version](https://img.shields.io/npm/v/rn-ci-setup.svg)](https://www.npmjs.com/package/rn-ci-setup)
+
 CLI to scaffold React Native CI/CD using GitHub Actions and Fastlane.
+
+## Install
+
+```bash
+npm i -g rn-ci-setup
+```
+
+Or use directly:
+
+```bash
+npx rn-ci-setup init
+```
 
 ## Usage
 
