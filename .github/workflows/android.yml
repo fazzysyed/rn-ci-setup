@@ -28,7 +28,3 @@ jobs:
       - name: Build Android release
         run: ./gradlew assembleRelease
         working-directory: ./android
-      - name: Deploy to Firebase App Distribution
-        run: bundle exec fastlane android firebase
-        working-directory: ./android
-

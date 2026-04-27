@@ -2,6 +2,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { execSync } = require("child_process");
 const inquirer = require("inquirer").default;
 
 const CONFIG_FILE = ".rn-ci-setup.json";
@@ -98,13 +99,6 @@ function getAndroidWorkflow(options) {
     ? `\n      - name: Expo prebuild (Android)\n        run: npx expo prebuild --platform android --non-interactive\n        working-directory: ${wd}\n`
     : "";
 
-  let deployStep = "";
-  if (options.deploy.playStore) {
-    deployStep = `\n      - name: Deploy to Play Store\n        run: bundle exec fastlane android playstore\n        working-directory: ${wd}/android\n`;
-  } else if (options.deploy.firebase) {
-    deployStep = `\n      - name: Deploy to Firebase App Distribution\n        run: bundle exec fastlane android firebase\n        working-directory: ${wd}/android\n`;
-  }
-
   return `name: Android CI
 
 on:
@@ -134,7 +128,7 @@ jobs:
           java-version: 17${expoPrebuild}
       - name: Build Android release
         run: ./gradlew assembleRelease
-        working-directory: ${wd}/android${deployStep}
+        working-directory: ${wd}/android
 `;
 }
 
@@ -143,10 +137,6 @@ function getIosWorkflow(options) {
   const expoPrebuild = options.template === "expo"
     ? `\n      - name: Expo prebuild (iOS)\n        run: npx expo prebuild --platform ios --non-interactive\n        working-directory: ${wd}\n`
     : "";
-  const deployStep = options.deploy.testFlight
-    ? `\n      - name: Deploy to TestFlight\n        run: bundle exec fastlane ios testflight\n        working-directory: ${wd}/ios\n`
-    : "";
-
   return `name: iOS CI
 
 on:
@@ -178,7 +168,7 @@ jobs:
         working-directory: ${wd}/ios
       - name: Build iOS
         run: xcodebuild -workspace *.xcworkspace -scheme \${IOS_SCHEME:-App} -sdk iphonesimulator -configuration Release build
-        working-directory: ${wd}/ios${deployStep}
+        working-directory: ${wd}/ios
 `;
 }
 
@@ -270,111 +260,39 @@ ${scripts.join("\n")}
 `;
 }
 
-function getAndroidFastfile(options) {
-  const firebaseLane = options.deploy.firebase
-    ? `
-  desc "Deploy to Firebase App Distribution"
-  lane :firebase do
-    gradle(task: "assembleRelease")
-    firebase_app_distribution(
-      app: ENV["FIREBASE_ANDROID_APP_ID"],
-      testers: ENV["FIREBASE_TESTERS"],
-      release_notes: ENV["RELEASE_NOTES"] || "Automated build from CI",
-      apk_path: "app/build/outputs/apk/release/app-release.apk"
-    )
-  end`
-    : "";
-
-  const playStoreLane = options.deploy.playStore
-    ? `
-  desc "Upload Android bundle to Play Store"
-  lane :playstore do
-    gradle(task: "bundleRelease")
-    upload_to_play_store(
-      track: ENV["PLAY_STORE_TRACK"] || "internal",
-      aab: "app/build/outputs/bundle/release/app-release.aab"
-    )
-  end`
-    : "";
-
-  return `default_platform(:android)
-
-platform :android do
-  desc "Build Android release APK"
-  lane :beta do
-    gradle(task: "assembleRelease")
-  end${firebaseLane}${playStoreLane}
-end
-`;
-}
-
-function getIosFastfile(options) {
-  const testFlightLane = options.deploy.testFlight
-    ? `
-  desc "Upload to TestFlight"
-  lane :testflight do
-    build_app(
-      workspace: ENV["IOS_WORKSPACE"] || "ios/App.xcworkspace",
-      scheme: ENV["IOS_SCHEME"] || "App"
-    )
-    upload_to_testflight
-  end`
-    : "";
-
-  return `default_platform(:ios)
-
-platform :ios do
-  desc "Build iOS app"
-  lane :beta do
-    build_app(
-      workspace: ENV["IOS_WORKSPACE"] || "ios/App.xcworkspace",
-      scheme: ENV["IOS_SCHEME"] || "App"
-    )
-  end${testFlightLane}
-end
-`;
-}
-
 function getSecretsChecklist(options) {
   const required = ["NODE_ENV"];
-  const recommended = ["RELEASE_NOTES"];
+  const recommended = [];
 
   if (options.targets.android) {
     required.push("ANDROID_KEYSTORE_BASE64", "ANDROID_KEYSTORE_PASSWORD", "ANDROID_KEY_ALIAS", "ANDROID_KEY_PASSWORD");
-    if (options.deploy.firebase) required.push("FIREBASE_ANDROID_APP_ID");
-    if (options.deploy.playStore) required.push("PLAY_STORE_JSON_KEY_BASE64", "ANDROID_PACKAGE_NAME");
-    if (options.deploy.firebase) recommended.push("FIREBASE_TESTERS");
-    if (options.deploy.playStore) recommended.push("PLAY_STORE_TRACK");
   }
 
   if (options.targets.ios) {
     recommended.push("IOS_SCHEME", "IOS_WORKSPACE");
-    if (options.deploy.testFlight) required.push("APPLE_API_KEY_ID", "APPLE_API_ISSUER_ID", "APPLE_API_KEY_BASE64");
+    required.push("APPLE_API_KEY_ID", "APPLE_API_ISSUER_ID", "APPLE_API_KEY_BASE64");
   }
 
   return { required, recommended };
 }
 
 function getEnvExample(options) {
-  const lines = ["# Shared", "NODE_ENV=production", "RELEASE_NOTES=Automated build from CI", ""];
+  const lines = ["# Shared", "NODE_ENV=production", ""];
   if (options.targets.android) {
     lines.push("# Android", "ANDROID_KEYSTORE_BASE64=", "ANDROID_KEYSTORE_PASSWORD=", "ANDROID_KEY_ALIAS=", "ANDROID_KEY_PASSWORD=");
-    if (options.deploy.firebase) lines.push("FIREBASE_ANDROID_APP_ID=", "FIREBASE_TESTERS=");
-    if (options.deploy.playStore) lines.push("PLAY_STORE_JSON_KEY_BASE64=", "PLAY_STORE_TRACK=internal", "ANDROID_PACKAGE_NAME=com.example.app");
     lines.push("");
   }
   if (options.targets.ios) {
     lines.push("# iOS", "IOS_SCHEME=App", "IOS_WORKSPACE=ios/App.xcworkspace");
-    if (options.deploy.testFlight) lines.push("APPLE_API_KEY_ID=", "APPLE_API_ISSUER_ID=", "APPLE_API_KEY_BASE64=");
+    lines.push("APPLE_API_KEY_ID=", "APPLE_API_ISSUER_ID=", "APPLE_API_KEY_BASE64=");
     lines.push("");
   }
   return `${lines.join("\n")}\n`;
 }
 
 function getEnvProduction(options) {
-  const lines = ["NODE_ENV=production", "RELEASE_NOTES=Automated build from CI"];
+  const lines = ["NODE_ENV=production"];
   if (options.targets.ios) lines.push("IOS_SCHEME=App", "IOS_WORKSPACE=ios/App.xcworkspace");
-  if (options.targets.android && options.deploy.playStore) lines.push("PLAY_STORE_TRACK=internal", "ANDROID_PACKAGE_NAME=com.example.app");
   return `${lines.join("\n")}\n`;
 }
 
@@ -400,6 +318,9 @@ function getSecretsGuide(options) {
   for (const key of checklist.required) lines.push(`- [ ] ${key}`);
   lines.push("", "## Recommended");
   for (const key of checklist.recommended) lines.push(`- [ ] ${key}`);
+  if (options.ciProvider === "github") {
+    lines.push("", "Create GitHub secrets automatically:", "```bash", "rn-ci-setup secrets", "```", "");
+  }
   lines.push("", "Validate locally:", "```bash", "rn-ci-setup doctor", "```", "");
   return `${lines.join("\n")}\n`;
 }
@@ -441,32 +362,6 @@ async function resolveTemplate() {
     }
   ]);
   return answers.template;
-}
-
-async function resolveDeployOptions(targets) {
-  const fromFlags = {
-    firebase: hasFlag("firebase"),
-    playStore: hasFlag("playstore"),
-    testFlight: hasFlag("testflight")
-  };
-
-  if (fromFlags.firebase || fromFlags.playStore || fromFlags.testFlight) {
-    return {
-      firebase: targets.android ? fromFlags.firebase : false,
-      playStore: targets.android ? fromFlags.playStore : false,
-      testFlight: targets.ios ? fromFlags.testFlight : false
-    };
-  }
-
-  const choices = [];
-  if (targets.android) {
-    choices.push({ name: "Firebase App Distribution (Android)", value: "firebase", checked: true });
-    choices.push({ name: "Play Store upload (Android)", value: "playStore" });
-  }
-  if (targets.ios) choices.push({ name: "TestFlight upload (iOS)", value: "testFlight", checked: true });
-  if (choices.length === 0) return { firebase: false, playStore: false, testFlight: false };
-  const answers = await inquirer.prompt([{ type: "checkbox", name: "deploy", message: "Select deployment integrations:", choices }]);
-  return { firebase: answers.deploy.includes("firebase"), playStore: answers.deploy.includes("playStore"), testFlight: answers.deploy.includes("testFlight") };
 }
 
 async function resolveCiProvider() {
@@ -515,19 +410,13 @@ function writeScaffold(options) {
     writeFileSafe(path.join(options.targetRoot, "codemagic.yaml"), getCodemagicConfig(options));
   }
 
-  if (options.targets.android) {
-    writeFileSafe(path.join(options.targetRoot, "android/fastlane/Fastfile"), getAndroidFastfile(options));
-  }
-  if (options.targets.ios) {
-    writeFileSafe(path.join(options.targetRoot, "ios/fastlane/Fastfile"), getIosFastfile(options));
-  }
   writeFileSafe(path.join(options.targetRoot, ".env.example"), getEnvExample(options));
   writeFileSafe(path.join(options.targetRoot, ".env.production"), getEnvProduction(options));
   writeFileSafe(path.join(options.targetRoot, "docs/github-secrets.md"), getSecretsGuide(options));
   writeFileSafe(
     path.join(options.targetRoot, CONFIG_FILE),
     `${JSON.stringify(
-      { version: 3, appPath: options.appPath, template: options.template, ciProvider: options.ciProvider, targets: options.targets, deploy: options.deploy },
+      { version: 4, appPath: options.appPath, template: options.template, ciProvider: options.ciProvider, targets: options.targets },
       null,
       2
     )}\n`
@@ -541,39 +430,91 @@ async function runInit() {
   const targets = await resolveTargets();
   validateAppPath(cwd, appPath, targets);
   const template = await resolveTemplate();
-  const deploy = await resolveDeployOptions(targets);
-  const options = { appPath, targetRoot: path.join(cwd, appPath), ciProvider, template, targets, deploy };
+  const options = { appPath, targetRoot: path.join(cwd, appPath), ciProvider, template, targets };
   writeScaffold(options);
   console.log("\nSetup complete.");
   console.log(`App path: ${appPath}`);
   console.log(`CI provider: ${ciProvider}`);
   console.log(`Template: ${template}`);
   console.log("Suggested next steps:");
-  console.log("1) Review generated workflows and Fastfiles");
+  console.log("1) Review generated CI files");
   console.log("2) Add secrets listed in docs/github-secrets.md");
-  console.log("3) Run rn-ci-setup doctor");
-  console.log("4) Commit files and run a test push to main");
+  console.log("3) If using GitHub Actions, run rn-ci-setup secrets");
+  console.log("4) Run rn-ci-setup doctor");
+  console.log("5) Commit files and run a test push to main");
 }
 
-function runDoctor() {
-  const cwd = process.cwd();
+function ensureGhAvailable() {
+  try {
+    execSync("gh --version", { stdio: "ignore" });
+  } catch (_error) {
+    throw new Error("GitHub CLI (gh) is required. Install it first: https://cli.github.com/");
+  }
+}
+
+function resolveGitHubRepo() {
+  const fromFlag = getFlagValue("repo");
+  if (fromFlag) {
+    return fromFlag;
+  }
+  try {
+    return execSync("gh repo view --json nameWithOwner -q .nameWithOwner", { encoding: "utf8" }).trim();
+  } catch (_error) {
+    throw new Error("Unable to detect GitHub repo. Pass it explicitly with --repo owner/name.");
+  }
+}
+
+function getDoctorOptions(cwd) {
   const config =
     readJsonSafe(path.join(cwd, CONFIG_FILE)) ||
     {
       appPath: ".",
       template: "bare",
       ciProvider: "github",
-      targets: { android: fs.existsSync(path.join(cwd, "android")), ios: fs.existsSync(path.join(cwd, "ios")) },
-      deploy: { firebase: false, playStore: false, testFlight: false }
+      targets: { android: fs.existsSync(path.join(cwd, "android")), ios: fs.existsSync(path.join(cwd, "ios")) }
     };
-  const options = {
+  return {
     appPath: config.appPath,
     targetRoot: cwd,
     template: config.template,
     ciProvider: config.ciProvider || "github",
-    targets: config.targets,
-    deploy: config.deploy
+    targets: config.targets
   };
+}
+
+async function runSecrets() {
+  const cwd = process.cwd();
+  const options = getDoctorOptions(cwd);
+  if (options.ciProvider !== "github") {
+    throw new Error("`secrets` command is only supported when ciProvider is github.");
+  }
+
+  ensureGhAvailable();
+  const repo = resolveGitHubRepo();
+  const checklist = getSecretsChecklist(options);
+  const envProd = readEnvFile(path.join(cwd, ".env.production"));
+  const envExample = readEnvFile(path.join(cwd, ".env.example"));
+
+  const prompts = checklist.required.map((key) => ({
+    type: "password",
+    name: key,
+    message: `Secret value for ${key}:`,
+    default: envProd[key] || envExample[key] || "",
+    mask: "*",
+    validate: (value) => (value ? true : `${key} is required`)
+  }));
+  const answers = await inquirer.prompt(prompts);
+
+  for (const key of checklist.required) {
+    const value = String(answers[key] || "");
+    execSync(`gh secret set ${key} --repo ${repo} --body ${JSON.stringify(value)}`, { stdio: "inherit" });
+  }
+  console.log(`\nUpdated ${checklist.required.length} secrets in ${repo}.`);
+}
+
+function runDoctor() {
+  const cwd = process.cwd();
+  const options = getDoctorOptions(cwd);
   const checklist = getSecretsChecklist(options);
   const envProd = readEnvFile(path.join(cwd, ".env.production"));
   const envExample = readEnvFile(path.join(cwd, ".env.example"));
@@ -596,7 +537,7 @@ function runDoctor() {
     console.error("\nLikely placeholder values detected:");
     for (const key of weak) console.error(`- ${key}`);
   }
-  console.error("\nFix values in .env.production and GitHub Actions secrets, then rerun `rn-ci-setup doctor`.");
+  console.error("\nFix values in .env.production and your CI secrets, then rerun `rn-ci-setup doctor`.");
   process.exit(1);
 }
 
@@ -604,15 +545,16 @@ function printHelp() {
   console.log(`rn-ci-setup CLI
 
 Usage:
-  rn-ci-setup init [--ci-provider <github|bitrise|codemagic>] [--android] [--ios] [--expo|--bare] [--firebase] [--playstore] [--testflight] [--app-path <path>]
+  rn-ci-setup init [--ci-provider <github|bitrise|codemagic>] [--android] [--ios] [--expo|--bare] [--app-path <path>]
+  rn-ci-setup secrets [--repo <owner/name>]
   rn-ci-setup doctor
 
 Examples:
-  npx rn-ci-setup init --ci-provider github
+  npx rn-ci-setup init --ci-provider github --android --ios
   npx rn-ci-setup init --ci-provider bitrise --android --ios
-  npx rn-ci-setup init --ci-provider codemagic --android --expo --playstore --app-path apps/mobile
-  npx rn-ci-setup init --android --ios --firebase --testflight
-  npx rn-ci-setup init --android --expo --playstore --app-path apps/mobile
+  npx rn-ci-setup init --ci-provider codemagic --ios --app-path apps/mobile
+  npx rn-ci-setup secrets
+  npx rn-ci-setup secrets --repo fazzysyed/rn-ci-setup
   npx rn-ci-setup doctor
 `);
 }
@@ -627,6 +569,10 @@ async function main() {
     await runInit();
     return;
   }
+  if (command === "secrets") {
+    await runSecrets();
+    return;
+  }
   if (command === "doctor") {
     runDoctor();
     return;
@@ -637,6 +583,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error("Failed to run rn-ci-setup:", error);
+  console.error("Failed to run rn-ci-setup:", error.message || error);
   process.exit(1);
 });

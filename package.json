@@ -1,15 +1,16 @@
 {
   "name": "rn-ci-setup",
   "version": "1.0.0",
-  "description": "CLI to scaffold React Native CI/CD with Fastlane and GitHub Actions",
+  "description": "CLI to scaffold React Native CI/CD and manage CI secrets",
   "main": "bin/index.js",
   "bin": {
-    "rn-ci-setup": "./bin/index.js"
+    "rn-ci-setup": "bin/index.js"
   },
   "scripts": {
     "start": "node ./bin/index.js",
     "init": "node ./bin/index.js init",
-    "doctor": "node ./bin/index.js doctor"
+    "doctor": "node ./bin/index.js doctor",
+    "secrets": "node ./bin/index.js secrets"
   },
   "keywords": [],
   "author": "Faraz",
