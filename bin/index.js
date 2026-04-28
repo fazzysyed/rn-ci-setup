@@ -441,6 +441,9 @@ jobs:
       - name: Install gems
         run: bundle install
         working-directory: ${wd}
+      - name: Ensure gradlew executable
+        run: chmod +x android/gradlew
+        working-directory: ${wd}
       - name: Android CI lane (PR)
         if: github.event_name == 'pull_request'
         run: cd android && bundle exec fastlane ci
@@ -574,18 +577,18 @@ function getAndroidFastfile() {
 platform :android do
   desc "Android CI checks/build"
   lane :ci do
-    gradle(task: "clean", project_dir: "android")
-    gradle(task: "assembleDebug", project_dir: "android")
+    gradle(task: "clean")
+    gradle(task: "assembleDebug")
   end
 
   desc "Android beta artifact build"
   lane :beta do
-    gradle(task: "assembleRelease", project_dir: "android")
+    gradle(task: "assembleRelease")
   end
 
   desc "Android release artifact build"
   lane :release do
-    gradle(task: "bundleRelease", project_dir: "android")
+    gradle(task: "bundleRelease")
   end
 end
 `;
