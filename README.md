@@ -77,6 +77,22 @@ Optional repo override:
 npx rn-ci-setup secrets --repo owner/repo
 ```
 
+### `keys`
+
+Prints a guided checklist to generate platform API keys and map them to the expected GitHub Actions secrets.
+
+```bash
+npx rn-ci-setup keys
+```
+
+Platform-scoped usage:
+
+```bash
+npx rn-ci-setup keys --ios
+npx rn-ci-setup keys --android
+npx rn-ci-setup keys --ios --android
+```
+
 ### `doctor`
 
 Checks required CI/CD values and warns on missing or weak placeholders:
@@ -148,6 +164,51 @@ Recommended:
 - `SLACK_WEBHOOK_URL`
 - `DISCORD_WEBHOOK_URL`
 - `TEAMS_WEBHOOK_URL`
+
+## API Key Generation Guide
+
+You can print this guide anytime from CLI:
+
+```bash
+npx rn-ci-setup keys --ios --android
+```
+
+### App Store Connect API Key (iOS)
+
+1. Open App Store Connect -> Users and Access -> Integrations -> App Store Connect API.
+2. Generate a key and download the `.p8` file.
+3. Capture:
+   - Key ID
+   - Issuer ID
+   - Full `.p8` key content
+4. Add these secrets:
+   - `APP_STORE_CONNECT_KEY_ID`
+   - `APP_STORE_CONNECT_ISSUER_ID`
+   - `APP_STORE_CONNECT_PRIVATE_KEY`
+5. Ensure iOS signing secrets are also configured:
+   - `MATCH_GIT_URL`
+   - `MATCH_PASSWORD`
+   - `APPLE_APP_IDENTIFIER`
+   - `APPLE_TEAM_ID`
+
+### Google Play Console API Key (Android)
+
+1. Open Google Play Console -> Setup -> API access.
+2. Link a Google Cloud project.
+3. Create a service account in Google Cloud IAM.
+4. Grant required Play Console permissions to that service account.
+5. Create and download the service account JSON key.
+6. If your Android release lanes need base64:
+
+```bash
+base64 -i play-service-account.json | tr -d '\n'
+```
+
+7. Configure Android signing secrets:
+   - `ANDROID_KEYSTORE_BASE64`
+   - `ANDROID_KEYSTORE_PASSWORD`
+   - `ANDROID_KEY_ALIAS`
+   - `ANDROID_KEY_PASSWORD`
 
 ## Prerequisites
 

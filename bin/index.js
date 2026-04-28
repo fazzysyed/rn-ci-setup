@@ -978,6 +978,7 @@ async function runInit() {
     const channels = ["slack", "discord", "teams"].filter((ch) => notifications[ch]).join(", ");
     console.log(`Notifications: ${channels}`);
   }
+  console.log("Key generation checklist: run `rn-ci-setup keys --ios --android`.");
   console.log("Optional: run `rn-ci-setup doctor` from the app directory to validate local env hints.");
 }
 
@@ -1090,16 +1091,67 @@ job hooks, root Gemfile + ios/fastlane (iOS), bundle install, Fastlane lanes, gh
 Usage:
   rn-ci-setup init [--android] [--ios] [--expo|--bare] [--notify-slack] [--notify-discord] [--notify-teams]
                    [--app-path <path>] [--skip-bundle] [--skip-fastlane] [--skip-secrets] [--skip-push]
+  rn-ci-setup keys [--ios] [--android]
   rn-ci-setup secrets [--repo <owner/name>]
   rn-ci-setup doctor
 
 Examples:
   npx rn-ci-setup init --android --ios --notify-slack
+  npx rn-ci-setup keys --ios --android
   npx rn-ci-setup init --app-path apps/mobile --ios --skip-fastlane
   npx rn-ci-setup secrets
   npx rn-ci-setup secrets --repo owner/repo
   npx rn-ci-setup doctor
 `);
+}
+
+function runKeysGuide() {
+  const includeIos = hasFlag("ios") || (!hasFlag("ios") && !hasFlag("android"));
+  const includeAndroid = hasFlag("android") || (!hasFlag("ios") && !hasFlag("android"));
+
+  console.log("rn-ci-setup key generation guide");
+  console.log("");
+
+  if (includeIos) {
+    console.log("iOS: App Store Connect API key");
+    console.log("1) Open App Store Connect -> Users and Access -> Integrations -> App Store Connect API.");
+    console.log("2) Click Generate API Key and download the .p8 file.");
+    console.log("3) Save these values: KEY_ID, ISSUER_ID, and full .p8 content.");
+    console.log("4) Add GitHub secrets:");
+    console.log("   - APP_STORE_CONNECT_KEY_ID");
+    console.log("   - APP_STORE_CONNECT_ISSUER_ID");
+    console.log("   - APP_STORE_CONNECT_PRIVATE_KEY (paste full .p8 content)");
+    console.log("5) Also set iOS signing secrets:");
+    console.log("   - MATCH_GIT_URL");
+    console.log("   - MATCH_PASSWORD");
+    console.log("   - APPLE_APP_IDENTIFIER");
+    console.log("   - APPLE_TEAM_ID");
+    console.log("6) Optional:");
+    console.log("   - APP_STORE_CONNECT_TEAM_ID");
+    console.log("   - FASTLANE_USER");
+    console.log("");
+  }
+
+  if (includeAndroid) {
+    console.log("Android: Google Play Console API key");
+    console.log("1) Open Google Play Console -> Setup -> API access.");
+    console.log("2) Link a Google Cloud project (or create one).");
+    console.log("3) Create a service account in Google Cloud IAM.");
+    console.log("4) Grant required Play Console permissions to that service account.");
+    console.log("5) Create and download the service account JSON key.");
+    console.log("6) Convert the JSON file to base64:");
+    console.log("   base64 -i play-service-account.json | tr -d '\\n'");
+    console.log("7) Add Android GitHub secrets:");
+    console.log("   - ANDROID_KEYSTORE_BASE64");
+    console.log("   - ANDROID_KEYSTORE_PASSWORD");
+    console.log("   - ANDROID_KEY_ALIAS");
+    console.log("   - ANDROID_KEY_PASSWORD");
+    console.log("8) Keep the Play service account key in a separate secret if your lanes use it.");
+    console.log("");
+  }
+
+  console.log("After creating keys, run:");
+  console.log("  rn-ci-setup secrets");
 }
 
 async function main() {
@@ -1114,6 +1166,10 @@ async function main() {
   }
   if (command === "secrets") {
     await runSecrets();
+    return;
+  }
+  if (command === "keys") {
+    runKeysGuide();
     return;
   }
   if (command === "doctor") {
