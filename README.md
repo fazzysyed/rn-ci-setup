@@ -43,6 +43,7 @@ npx rn-ci-setup init
 
 Common flags:
 
+- `--ci-provider <github|bitrise|codemagic>`: choose CI provider (default: `github`)
 - `--android` / `--ios`: target platforms
 - `--expo` / `--bare`: project template
 - `--notify-slack`: enable Slack notification integration
@@ -57,7 +58,9 @@ Common flags:
 Examples:
 
 ```bash
-npx rn-ci-setup init --android --ios
+npx rn-ci-setup init --ci-provider github --android --ios
+npx rn-ci-setup init --ci-provider bitrise --android --ios
+npx rn-ci-setup init --ci-provider codemagic --ios --app-path apps/mobile
 npx rn-ci-setup init --ios --app-path apps/mobile
 npx rn-ci-setup init --android --ios --notify-slack --notify-teams
 npx rn-ci-setup init --android --ios --skip-fastlane --skip-secrets
@@ -105,14 +108,24 @@ npx rn-ci-setup doctor
 
 Depending on selected targets, `init` generates:
 
-- `.github/workflows/android.yml`
-- `.github/workflows/ios.yml`
+- `.github/workflows/android.yml` (GitHub provider)
+- `.github/workflows/ios.yml` (GitHub provider)
+- `bitrise.yml` (Bitrise provider)
+- `codemagic.yaml` (Codemagic provider)
 - `Gemfile` (ensures Fastlane dependency)
 - `ios/fastlane/Fastfile`
 - `ios/fastlane/Appfile`
 - `ios/fastlane/Matchfile`
 - `android/fastlane/Fastfile`
 - `.rn-ci-setup.json`
+
+## CI Provider Notes
+
+- **GitHub**: full automation path, including GitHub Actions secrets via `gh`.
+- **Bitrise**: generates `bitrise.yml` and Fastlane files; secrets must be added in Bitrise dashboard.
+- **Codemagic**: generates `codemagic.yaml` and Fastlane files; secrets must be added in Codemagic dashboard.
+
+For Bitrise/Codemagic projects, `--skip-secrets` is effectively implied because GitHub secret automation is not used.
 
 ## Fastlane Flow Executed by CLI
 

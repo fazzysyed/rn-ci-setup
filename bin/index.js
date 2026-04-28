@@ -696,6 +696,30 @@ ${scripts.join("\n")}
 `;
 }
 
+async function resolveCiProvider() {
+  const flagProvider = getFlagValue("ci-provider");
+  if (flagProvider) {
+    const normalized = flagProvider.toLowerCase();
+    if (["github", "bitrise", "codemagic"].includes(normalized)) return normalized;
+    throw new Error(`Unsupported --ci-provider value "${flagProvider}". Use github, bitrise, or codemagic.`);
+  }
+
+  const answers = await inquirer.prompt([
+    {
+      type: "list",
+      name: "ciProvider",
+      message: "Choose CI provider:",
+      choices: [
+        { name: "GitHub Actions", value: "github" },
+        { name: "Bitrise", value: "bitrise" },
+        { name: "Codemagic", value: "codemagic" }
+      ],
+      default: "github"
+    }
+  ]);
+  return answers.ciProvider;
+}
+
 function getSecretsChecklist(options) {
   const required = ["NODE_ENV"];
   const recommended = [];
@@ -898,6 +922,46 @@ function writeGithubAutomatedScaffold(options) {
   );
 }
 
+function writeProviderScaffold(options) {
+  if (options.ciProvider === "github") {
+    writeGithubAutomatedScaffold(options);
+    return;
+  }
+
+  if (options.ciProvider === "bitrise") {
+    writeFileSafe(path.join(options.targetRoot, "bitrise.yml"), getBitriseConfig(options));
+  }
+  if (options.ciProvider === "codemagic") {
+    writeFileSafe(path.join(options.targetRoot, "codemagic.yaml"), getCodemagicConfig(options));
+  }
+
+  if (options.targets.ios) {
+    ensureRootGemfileWithFastlane(options.targetRoot);
+    writeFileSafe(path.join(options.targetRoot, "ios/fastlane/Fastfile"), getIosFastfile());
+    writeFileSafe(path.join(options.targetRoot, "ios/fastlane/Appfile"), getIosAppfile());
+    writeFileSafe(path.join(options.targetRoot, "ios/fastlane/Matchfile"), getIosMatchfile());
+  }
+  if (options.targets.android) {
+    writeFileSafe(path.join(options.targetRoot, "android/fastlane/Fastfile"), getAndroidFastfile());
+  }
+
+  writeFileSafe(
+    path.join(options.targetRoot, CONFIG_FILE),
+    `${JSON.stringify(
+      {
+        version: 7,
+        appPath: options.appPath,
+        template: options.template,
+        ciProvider: options.ciProvider,
+        targets: options.targets,
+        notifications: options.notifications
+      },
+      null,
+      2
+    )}\n`
+  );
+}
+
 async function runInit() {
   const invocationDir = process.cwd();
   const gitRoot = getGitTopLevel(invocationDir) || invocationDir;
@@ -908,21 +972,24 @@ async function runInit() {
   const appPath = await runStage("Stage 2/8: Resolve app path", () => resolveAppPath(invocationDir));
   const targets = await runStage("Stage 3/8: Choose platforms", () => resolveTargets());
   await runStage("Stage 4/8: Validate app structure", () => validateAppPath(invocationDir, appPath, targets));
-  const template = await runStage("Stage 5/8: Select template", () => resolveTemplate());
-  const notifications = await runStage("Stage 6/8: Configure notifications", () => resolveNotifications());
+  const ciProvider = await runStage("Stage 5/8: Select CI provider", () => resolveCiProvider());
+  const template = await runStage("Stage 6/8: Select template", () => resolveTemplate());
+  const notifications = ciProvider === "github"
+    ? await runStage("Stage 7/8: Configure notifications", () => resolveNotifications())
+    : { slack: false, discord: false, teams: false };
 
   const targetRoot = path.join(invocationDir, appPath);
   const options = {
     appPath,
     targetRoot,
-    ciProvider: "github",
+    ciProvider,
     template,
     targets,
     notifications
   };
 
-  await runStage("Stage 7/8: Generate workflows and Fastlane files", () => {
-    writeGithubAutomatedScaffold(options);
+  await runStage("Stage 7/8: Generate CI and Fastlane files", () => {
+    writeProviderScaffold(options);
   });
 
   if (options.targets.ios || options.targets.android) {
@@ -945,23 +1012,35 @@ async function runInit() {
     }
   }
 
-  if (hasFlag("skip-secrets")) {
+  if (options.ciProvider !== "github") {
+    console.log(`\nSkipping GitHub Actions secrets for ${options.ciProvider}. Configure secrets in your CI provider dashboard.`);
+  } else if (hasFlag("skip-secrets")) {
     console.log("\nSkipping GitHub Actions secrets (--skip-secrets).");
   } else {
     await runSecrets(targetRoot);
   }
 
   const relForCommit = [];
-  if (targets.android) {
+  if (targets.android && options.ciProvider === "github") {
     relForCommit.push(path.relative(invocationDir, path.join(targetRoot, ".github", "workflows", "android.yml")));
-    relForCommit.push(path.relative(invocationDir, path.join(targetRoot, "android", "fastlane", "Fastfile")));
+  }
+  if (targets.ios && options.ciProvider === "github") {
+    relForCommit.push(path.relative(invocationDir, path.join(targetRoot, ".github", "workflows", "ios.yml")));
+  }
+  if (options.ciProvider === "bitrise") {
+    relForCommit.push(path.relative(invocationDir, path.join(targetRoot, "bitrise.yml")));
+  }
+  if (options.ciProvider === "codemagic") {
+    relForCommit.push(path.relative(invocationDir, path.join(targetRoot, "codemagic.yaml")));
   }
   if (targets.ios) {
-    relForCommit.push(path.relative(invocationDir, path.join(targetRoot, ".github", "workflows", "ios.yml")));
     relForCommit.push(path.relative(invocationDir, path.join(targetRoot, "Gemfile")));
     for (const name of ["Fastfile", "Appfile", "Matchfile"]) {
       relForCommit.push(path.relative(invocationDir, path.join(targetRoot, "ios", "fastlane", name)));
     }
+  }
+  if (targets.android) {
+    relForCommit.push(path.relative(invocationDir, path.join(targetRoot, "android", "fastlane", "Fastfile")));
   }
   relForCommit.push(path.relative(invocationDir, path.join(targetRoot, CONFIG_FILE)));
   const absForCommit = relForCommit.map((r) => path.resolve(invocationDir, r)).filter((p) => fs.existsSync(p));
@@ -973,6 +1052,7 @@ async function runInit() {
   console.log("\nSetup complete.");
   console.log(`App path: ${appPath}`);
   console.log(`Branch: ${branch}`);
+  console.log(`CI provider: ${ciProvider}`);
   console.log(`Template: ${template}`);
   if (notifications.slack || notifications.discord || notifications.teams) {
     const channels = ["slack", "discord", "teams"].filter((ch) => notifications[ch]).join(", ");
@@ -1089,16 +1169,18 @@ Automated init configures Git: remote/branch, GitHub Actions workflows, optional
 job hooks, root Gemfile + ios/fastlane (iOS), bundle install, Fastlane lanes, gh secrets, then commit/push.
 
 Usage:
-  rn-ci-setup init [--android] [--ios] [--expo|--bare] [--notify-slack] [--notify-discord] [--notify-teams]
+  rn-ci-setup init [--ci-provider <github|bitrise|codemagic>] [--android] [--ios] [--expo|--bare] [--notify-slack] [--notify-discord] [--notify-teams]
                    [--app-path <path>] [--skip-bundle] [--skip-fastlane] [--skip-secrets] [--skip-push]
   rn-ci-setup keys [--ios] [--android]
   rn-ci-setup secrets [--repo <owner/name>]
   rn-ci-setup doctor
 
 Examples:
-  npx rn-ci-setup init --android --ios --notify-slack
+  npx rn-ci-setup init --ci-provider github --android --ios --notify-slack
+  npx rn-ci-setup init --ci-provider bitrise --android --ios
+  npx rn-ci-setup init --ci-provider codemagic --ios --app-path apps/mobile
   npx rn-ci-setup keys --ios --android
-  npx rn-ci-setup init --app-path apps/mobile --ios --skip-fastlane
+  npx rn-ci-setup init --ci-provider github --app-path apps/mobile --ios --skip-fastlane
   npx rn-ci-setup secrets
   npx rn-ci-setup secrets --repo owner/repo
   npx rn-ci-setup doctor
