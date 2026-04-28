@@ -1,6 +1,6 @@
 {
   "name": "rn-ci-setup",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "CLI to scaffold React Native CI/CD and manage CI secrets",
   "main": "bin/index.js",
   "bin": {
