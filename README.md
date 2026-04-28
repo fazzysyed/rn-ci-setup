@@ -2,7 +2,9 @@
 
 [![npm version](https://img.shields.io/npm/v/rn-ci-setup.svg)](https://www.npmjs.com/package/rn-ci-setup)
 
-CLI to scaffold React Native CI/CD configs, Fastlane setup, and GitHub Actions secrets.
+`rn-ci-setup` is a production-focused CLI to automate React Native CI/CD setup with GitHub Actions, Fastlane, signing, and GitHub Secrets management.
+
+It is designed for teams that want a guided, repeatable setup flow with minimal manual file creation.
 
 ## Install
 
@@ -10,79 +12,60 @@ CLI to scaffold React Native CI/CD configs, Fastlane setup, and GitHub Actions s
 npm i -g rn-ci-setup
 ```
 
-Or use directly:
+or run without global install:
 
 ```bash
 npx rn-ci-setup init
 ```
 
-## Usage
+## What It Automates
+
+When you run `init`, the CLI orchestrates the full setup pipeline:
+
+1. Validates Git repository state and bootstrap behavior
+2. Creates GitHub repo with `gh` when `origin` is missing
+3. Lets you choose the working branch and syncs it
+4. Collects platform and template options
+5. Configures optional Slack/Discord/Teams notifications
+6. Generates GitHub workflows and Fastlane files
+7. Runs Bundler setup
+8. Runs interactive Fastlane setup commands
+9. Configures GitHub Actions secrets via `gh`
+10. Commits and pushes generated files (unless skipped)
+
+## Commands
+
+### `init`
 
 ```bash
 npx rn-ci-setup init
 ```
 
-Flags:
+Common flags:
 
-- `--ci-provider <github|bitrise|codemagic>`: choose generated CI config
-- `--android`: generate Android CI config
-- `--ios`: generate iOS CI config
-- `--expo` / `--bare`: choose template mode
-- `--notify-slack`: add Slack notifications for push/PR merge/build status
-- `--notify-discord`: add Discord notifications for push/PR merge/build status
-- `--notify-teams`: add Microsoft Teams notifications for push/PR merge/build status
-- `--app-path <path>`: target RN app directory in monorepos
+- `--android` / `--ios`: target platforms
+- `--expo` / `--bare`: project template
+- `--notify-slack`: enable Slack notification integration
+- `--notify-discord`: enable Discord notification integration
+- `--notify-teams`: enable Microsoft Teams notification integration
+- `--app-path <path>`: target app path for monorepos
+- `--skip-bundle`: skip `bundle install`
+- `--skip-fastlane`: skip Fastlane initialization/signing commands
+- `--skip-secrets`: skip GitHub secrets setup
+- `--skip-push`: skip commit/push stage
 
 Examples:
 
 ```bash
-npx rn-ci-setup init --ci-provider github --android --ios --notify-slack --notify-teams
-npx rn-ci-setup init --ci-provider bitrise --android --ios
-npx rn-ci-setup init --ci-provider codemagic --ios
-npx rn-ci-setup init --android
-npx rn-ci-setup init --android --expo
+npx rn-ci-setup init --android --ios
 npx rn-ci-setup init --ios --app-path apps/mobile
+npx rn-ci-setup init --android --ios --notify-slack --notify-teams
+npx rn-ci-setup init --android --ios --skip-fastlane --skip-secrets
 ```
 
-## Generated files
+### `secrets`
 
-- `.github/workflows/android.yml` (GitHub provider)
-- `.github/workflows/ios.yml` (GitHub provider)
-- `bitrise.yml` (Bitrise provider)
-- `codemagic.yaml` (Codemagic provider)
-- `Gemfile` (for `bundle install` + Fastlane gems)
-- `ios/fastlane/Fastfile`
-- `ios/fastlane/Appfile`
-- `ios/fastlane/Matchfile`
-- `.env.example`
-- `.env.production`
-- `docs/github-secrets.md`
-- `.rn-ci-setup.json`
-
-## Fastlane lanes
-
-Generated iOS lanes:
-
-- `fastlane match`
-- `fastlane development`
-- `fastlane appstore`
-
-When notification flags are enabled for GitHub provider, workflows also send webhook notifications for:
-
-- push and pull request activity
-- pull request merged
-- build success or failure
-
-GitHub iOS workflow runs:
-
-- `bundle install` (project root)
-- `cd ios && pod install`
-- `cd ios && bundle exec fastlane match`
-- `cd ios && bundle exec fastlane development`
-
-## GitHub secrets command
-
-Create/update required GitHub Actions secrets using `gh`:
+Creates or updates required GitHub Actions secrets using GitHub CLI:
 
 ```bash
 npx rn-ci-setup secrets
@@ -94,89 +77,102 @@ Optional repo override:
 npx rn-ci-setup secrets --repo owner/repo
 ```
 
-## Doctor command
+### `doctor`
 
-Validate required secrets and env values:
+Checks required CI/CD values and warns on missing or weak placeholders:
 
 ```bash
 npx rn-ci-setup doctor
 ```
 
-It checks `.env.production`, `.env.example`, and shell env vars against the setup profile.
+## Generated Artifacts
 
-## Key setup guide
+Depending on selected targets, `init` generates:
 
-### App Store Connect API key (for iOS/Fastlane)
+- `.github/workflows/android.yml`
+- `.github/workflows/ios.yml`
+- `Gemfile` (ensures Fastlane dependency)
+- `ios/fastlane/Fastfile`
+- `ios/fastlane/Appfile`
+- `ios/fastlane/Matchfile`
+- `android/fastlane/Fastfile`
+- `.rn-ci-setup.json`
 
-1. Open [App Store Connect](https://appstoreconnect.apple.com/) -> **Users and Access** -> **Integrations** -> **App Store Connect API**.
-2. Click **Generate API Key**.
-3. Save these values:
-   - **Key ID**
-   - **Issuer ID**
-   - Downloaded `.p8` private key file
-4. Convert the `.p8` file to base64:
+## Fastlane Flow Executed by CLI
 
-```bash
-base64 -i AuthKey_XXXXXX.p8 | tr -d '\n'
-```
+For iOS, the CLI supports this setup flow:
 
-5. Add to secrets/env:
-   - `APPLE_API_KEY_ID` = Key ID
-   - `APPLE_API_ISSUER_ID` = Issuer ID
-   - `APPLE_API_KEY_BASE64` = base64 output
-   - `APPLE_ID`, `APPLE_TEAM_ID`, `APP_STORE_CONNECT_TEAM_ID`, `APPLE_APP_IDENTIFIER`
+- `cd ios && bundle exec fastlane init` (if missing)
+- `cd ios && bundle exec fastlane match init` (if needed)
+- `cd ios && bundle exec fastlane match appstore`
+- `cd ios && bundle exec fastlane match development`
 
-### Google Play Console API key (for Android publishing)
+For Android, the CLI initializes Fastlane when needed:
 
-1. Open [Google Play Console](https://play.google.com/console/) -> **Setup** -> **API access**.
-2. Link a Google Cloud project (or create one).
-3. In Google Cloud IAM, create a **Service Account**.
-4. Grant required Play Console permissions to that service account user (Release manager/Admin as needed).
-5. Create and download the service account JSON key.
-6. Convert JSON key to base64:
+- `cd android && bundle exec fastlane init`
 
-```bash
-base64 -i play-service-account.json | tr -d '\n'
-```
+## Workflow Trigger Strategy
 
-7. Add to secrets/env:
-   - `PLAY_STORE_JSON_KEY_BASE64` = base64 output
-   - `ANDROID_PACKAGE_NAME` = your app package ID
+Generated workflows follow this model:
 
-### Tip
+- `pull_request` to `main`/`master`: run CI lanes
+- `push` to `main`/`master`: run beta/distribution lanes
+- `workflow_dispatch`: manual release lanes
 
-If you generated GitHub workflows, run:
+## Required Secrets (GitHub Actions)
 
-```bash
-npx rn-ci-setup secrets
-```
+### iOS
 
-This command helps you push required values into GitHub Actions secrets.
+- `APP_STORE_CONNECT_KEY_ID`
+- `APP_STORE_CONNECT_ISSUER_ID`
+- `APP_STORE_CONNECT_PRIVATE_KEY`
+- `MATCH_GIT_URL`
+- `MATCH_PASSWORD`
+- `APPLE_APP_IDENTIFIER`
+- `APPLE_TEAM_ID`
 
-## Local development
+Recommended:
+
+- `APP_STORE_CONNECT_TEAM_ID`
+- `FASTLANE_USER`
+
+### Android
+
+- `ANDROID_KEYSTORE_BASE64`
+- `ANDROID_KEYSTORE_PASSWORD`
+- `ANDROID_KEY_ALIAS`
+- `ANDROID_KEY_PASSWORD`
+
+### Notifications (optional)
+
+- `SLACK_WEBHOOK_URL`
+- `DISCORD_WEBHOOK_URL`
+- `TEAMS_WEBHOOK_URL`
+
+## Prerequisites
+
+- Node.js and npm
+- Git
+- GitHub CLI (`gh`) authenticated
+- Ruby and Bundler
+- Xcode/CocoaPods for iOS pipelines
+- Android toolchain for Android pipelines
+
+## Local Development
 
 ```bash
 npm install
-npm run init -- --android --ios
-npm run secrets
-npm run doctor
+node ./bin/index.js --help
+node ./bin/index.js init
+node ./bin/index.js secrets
+node ./bin/index.js doctor
 ```
 
-## Publish automation
+## Release to npm
 
-This repo publishes to npm from GitHub Actions:
+```bash
+npm version patch
+npm publish
+```
 
-- npm: `rn-ci-setup`
-
-Workflow file: `.github/workflows/publish.yml`
-
-Required secret:
-
-- `NPM_TOKEN` (from npm access tokens with publish permission)
-
-How to release:
-
-1. Bump version in `package.json` (or use `npm version patch|minor|major`)
-2. Push commit and tag
-3. Create/publish a GitHub Release for that tag
-4. Workflow publishes to npm automatically
+Use `minor` or `major` version bumps when appropriate.

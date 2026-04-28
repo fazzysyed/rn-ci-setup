@@ -2,7 +2,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { execSync } = require("child_process");
+const { execSync, execFileSync } = require("child_process");
 const inquirer = require("inquirer").default;
 
 const CONFIG_FILE = ".rn-ci-setup.json";
@@ -87,6 +87,234 @@ function detectRnApps(rootDir) {
 function getRelativeWorkDir(targetRoot) {
   const rel = path.relative(process.cwd(), targetRoot).replace(/\\/g, "/");
   return rel || ".";
+}
+
+function isInsideGitWorkTree(cwd) {
+  try {
+    execSync("git rev-parse --is-inside-work-tree", { cwd, stdio: "ignore" });
+    return true;
+  } catch (_e) {
+    return false;
+  }
+}
+
+function getGitTopLevel(startDir) {
+  try {
+    return execSync("git rev-parse --show-toplevel", { cwd: startDir, encoding: "utf8" }).trim();
+  } catch (_e) {
+    return null;
+  }
+}
+
+function hasAnyCommit(cwd) {
+  try {
+    execSync("git rev-parse HEAD", { cwd, stdio: "ignore" });
+    return true;
+  } catch (_e) {
+    return false;
+  }
+}
+
+function hasOriginRemote(cwd) {
+  try {
+    const url = execSync("git remote get-url origin", { cwd, encoding: "utf8" }).trim();
+    return Boolean(url);
+  } catch (_e) {
+    return false;
+  }
+}
+
+function listGitBranches(cwd) {
+  try {
+    const out = execSync("git branch -a", { cwd, encoding: "utf8" });
+    const names = new Set();
+    for (const raw of out.split(/\r?\n/)) {
+      let b = raw.trim();
+      if (!b) continue;
+      if (b.startsWith("*")) b = b.slice(1).trim();
+      b = b.replace(/^remotes\/origin\//, "");
+      if (!b || b === "HEAD" || b.includes("->")) continue;
+      names.add(b);
+    }
+    return Array.from(names).sort();
+  } catch (_e) {
+    return [];
+  }
+}
+
+function gitCheckoutBranch(cwd, branch) {
+  try {
+    execSync(`git checkout ${branch}`, { cwd, stdio: "inherit" });
+    return;
+  } catch (_e) {
+    execSync("git fetch origin", { cwd, stdio: "inherit" });
+    execSync(`git checkout -B ${branch} refs/remotes/origin/${branch}`, { cwd, stdio: "inherit" });
+  }
+}
+
+function ensureRootGemfileWithFastlane(targetRoot) {
+  const gemfilePath = path.join(targetRoot, "Gemfile");
+  const marker = 'gem "fastlane"';
+  if (fs.existsSync(gemfilePath)) {
+    const existing = fs.readFileSync(gemfilePath, "utf8");
+    if (existing.includes("fastlane")) return;
+    const suffix = existing.endsWith("\n") ? "" : "\n";
+    fs.writeFileSync(gemfilePath, `${existing}${suffix}\n${marker}\n`, "utf8");
+    console.log(`Updated ${path.relative(process.cwd(), gemfilePath)} (added fastlane)`);
+    return;
+  }
+  writeFileSafe(gemfilePath, getRootGemfile());
+}
+
+function runBundleInstallIfGemfile(dir, label) {
+  const gemfile = path.join(dir, "Gemfile");
+  const rel = path.relative(process.cwd(), dir) || ".";
+  if (!fs.existsSync(gemfile)) {
+    console.log(`No Gemfile in ${rel}${label ? ` (${label})` : ""}; skipping bundle install there.`);
+    return;
+  }
+  console.log(`\nRunning bundle install in ${rel}${label ? ` (${label})` : ""}...`);
+  execSync("bundle install", { cwd: dir, stdio: "inherit" });
+}
+
+async function runStage(name, fn, optional = false) {
+  console.log(`\n== ${name} ==`);
+  try {
+    return await fn();
+  } catch (error) {
+    if (optional) {
+      console.warn(`Warning in optional stage "${name}": ${error.message || error}`);
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function runFastlaneIosSetup(targetRoot) {
+  const iosDir = path.join(targetRoot, "ios");
+  if (!fs.existsSync(iosDir)) {
+    console.log("Skipping iOS Fastlane (no ios/ directory).");
+    return;
+  }
+  const fastlaneDir = path.join(iosDir, "fastlane");
+  const matchfile = path.join(fastlaneDir, "Matchfile");
+
+  if (!fs.existsSync(fastlaneDir)) {
+    console.log("\nRunning iOS Fastlane initialization (interactive): bundle exec fastlane init");
+    execSync("cd ios && bundle exec fastlane init", { cwd: targetRoot, stdio: "inherit" });
+  }
+
+  if (!fs.existsSync(matchfile)) {
+    console.log("\nRunning iOS Fastlane Match initialization (interactive): bundle exec fastlane match init");
+    execSync("cd ios && bundle exec fastlane match init", { cwd: targetRoot, stdio: "inherit" });
+  }
+
+  console.log("\nRunning iOS signing setup: bundle exec fastlane match appstore");
+  execSync("cd ios && bundle exec fastlane match appstore", { cwd: targetRoot, stdio: "inherit" });
+  console.log("\nRunning iOS signing setup: bundle exec fastlane match development");
+  execSync("cd ios && bundle exec fastlane match development", { cwd: targetRoot, stdio: "inherit" });
+}
+
+function runFastlaneAndroidSetup(targetRoot) {
+  const androidDir = path.join(targetRoot, "android");
+  if (!fs.existsSync(androidDir)) {
+    console.log("Skipping Android Fastlane (no android/ directory).");
+    return;
+  }
+  const fastlaneDir = path.join(androidDir, "fastlane");
+  if (!fs.existsSync(fastlaneDir)) {
+    console.log("\nRunning Android Fastlane initialization (interactive): bundle exec fastlane init");
+    execSync("cd android && bundle exec fastlane init", { cwd: targetRoot, stdio: "inherit" });
+  } else {
+    console.log("Android Fastlane already initialized.");
+  }
+}
+
+function gitAddCommitPush(cwd, paths, message) {
+  if (hasFlag("skip-push")) {
+    console.log("\nSkipping git commit/push (--skip-push).");
+    return;
+  }
+  const existing = paths.filter((p) => fs.existsSync(p));
+  if (!existing.length) return;
+  for (const p of existing) {
+    execFileSync("git", ["add", p], { cwd, stdio: "inherit" });
+  }
+  try {
+    execFileSync("git", ["commit", "-m", message], { cwd, stdio: "inherit" });
+  } catch (_e) {
+    console.log("Nothing to commit or commit skipped (no staged changes).");
+    return;
+  }
+  execFileSync("git", ["push", "-u", "origin", "HEAD"], { cwd, stdio: "inherit" });
+}
+
+async function resolveGitRemoteAndBranch(cwd) {
+  if (!isInsideGitWorkTree(cwd)) {
+    console.log("Not a git repository. Running git init...");
+    execSync("git init", { cwd, stdio: "inherit" });
+  }
+
+  if (!hasOriginRemote(cwd)) {
+    ensureGhAvailable();
+    const { create } = await inquirer.prompt([
+      {
+        type: "confirm",
+        name: "create",
+        message: "No git remote (origin) found. Create a new GitHub repository and push the master branch?",
+        default: true
+      }
+    ]);
+    if (!create) {
+      throw new Error("Add a Git remote named origin, then rerun rn-ci-setup init.");
+    }
+
+    const defaultName = path.basename(path.resolve(cwd));
+    const ans = await inquirer.prompt([
+      { type: "input", name: "repoName", message: "New GitHub repository name:", default: defaultName },
+      {
+        type: "list",
+        name: "visibility",
+        message: "Repository visibility:",
+        choices: ["private", "public"],
+        default: "private"
+      }
+    ]);
+    const vis = ans.visibility === "public" ? "--public" : "--private";
+
+    if (!hasAnyCommit(cwd)) {
+      execSync("git commit --allow-empty -m \"chore: initial commit\"", { cwd, stdio: "inherit" });
+    }
+    execSync("git branch -M master", { cwd, stdio: "inherit" });
+
+    execSync(`gh repo create ${ans.repoName} ${vis} --source=. --remote=origin --push`, { cwd, stdio: "inherit" });
+    console.log("Repository created and pushed to master.");
+    return { branch: "master" };
+  }
+
+  let unique = listGitBranches(cwd);
+  if (!unique.length) {
+    execSync("git fetch origin", { cwd, stdio: "inherit" });
+    unique = listGitBranches(cwd);
+  }
+  if (!unique.length) throw new Error("No branches found on origin. Push a branch first or create a new repository.");
+  unique = Array.from(new Set(unique)).sort();
+  const { branch } = await inquirer.prompt([
+    {
+      type: "list",
+      name: "branch",
+      message: "Select the branch to use for CI setup (workflows and commits use this branch):",
+      choices: unique,
+      default: unique.includes("master") ? "master" : unique.includes("main") ? "main" : unique[0]
+    }
+  ]);
+  gitCheckoutBranch(cwd, branch);
+  try {
+    execSync("git pull --ff-only", { cwd, stdio: "inherit" });
+  } catch (_e) {
+    console.log("Note: git pull --ff-only failed; continuing with current checkout.");
+  }
+  return { branch };
 }
 
 function getBashCdPrefix(wd) {
@@ -178,14 +406,14 @@ function getAndroidWorkflow(options) {
     ? `\n      - name: Expo prebuild (Android)\n        run: npx expo prebuild --platform android --non-interactive\n        working-directory: ${wd}\n`
     : "";
 
-  return `name: Android CI
+  return `name: Android CI/CD
 
 on:
   push:
-    branches: [main]
+    branches: [master, main]
   pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened, closed]
+    branches: [master, main]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -206,9 +434,25 @@ jobs:
         with:
           distribution: temurin
           java-version: 17${expoPrebuild}
-      - name: Build Android release
-        run: ./gradlew assembleRelease
-        working-directory: ${wd}/android
+      - name: Install Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.2"
+      - name: Install gems
+        run: bundle install
+        working-directory: ${wd}
+      - name: Android CI lane (PR)
+        if: github.event_name == 'pull_request'
+        run: cd android && bundle exec fastlane ci
+        working-directory: ${wd}
+      - name: Android beta lane (push main/master)
+        if: github.event_name == 'push'
+        run: cd android && bundle exec fastlane beta
+        working-directory: ${wd}
+      - name: Android release lane (manual)
+        if: github.event_name == 'workflow_dispatch'
+        run: cd android && bundle exec fastlane release
+        working-directory: ${wd}
 ${getNotificationJobs(options)}`;
 }
 
@@ -217,14 +461,14 @@ function getIosWorkflow(options) {
   const expoPrebuild = options.template === "expo"
     ? `\n      - name: Expo prebuild (iOS)\n        run: npx expo prebuild --platform ios --non-interactive\n        working-directory: ${wd}\n`
     : "";
-  return `name: iOS CI
+  return `name: iOS CI/CD
 
 on:
   push:
-    branches: [main]
+    branches: [master, main]
   pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened, closed]
+    branches: [master, main]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -250,15 +494,18 @@ jobs:
       - name: Install CocoaPods
         run: pod install
         working-directory: ${wd}/ios
-      - name: Fastlane match
-        run: cd ios && bundle exec fastlane match
+      - name: iOS CI lane (PR)
+        if: github.event_name == 'pull_request'
+        run: cd ios && bundle exec fastlane ci
         working-directory: ${wd}
-      - name: Fastlane development
-        run: cd ios && bundle exec fastlane development
+      - name: iOS beta lane (push main/master)
+        if: github.event_name == 'push'
+        run: cd ios && bundle exec fastlane beta
         working-directory: ${wd}
-      - name: Build iOS
-        run: xcodebuild -workspace *.xcworkspace -scheme \${IOS_SCHEME:-App} -sdk iphonesimulator -configuration Release build
-        working-directory: ${wd}/ios
+      - name: iOS release lane (manual)
+        if: github.event_name == 'workflow_dispatch'
+        run: cd ios && bundle exec fastlane release
+        working-directory: ${wd}
 ${getNotificationJobs(options)}`;
 }
 
@@ -273,28 +520,72 @@ function getIosFastfile() {
   return `default_platform(:ios)
 
 platform :ios do
-  desc "Sync signing certificates and profiles"
-  lane :match do
-    match(type: "appstore", readonly: true)
+  desc "CI checks/tests lane"
+  lane :ci do
+    setup_ci if is_ci
+    sh("bundle exec pod install")
+    scan(
+      scheme: ENV["IOS_SCHEME"] || "App",
+      clean: true
+    )
   end
 
-  desc "Build development/TestFlight-ready iOS app"
-  lane :development do
+  desc "Build and upload to TestFlight"
+  lane :beta do
+    app_store_connect_api_key(
+      key_id: ENV["APP_STORE_CONNECT_KEY_ID"],
+      issuer_id: ENV["APP_STORE_CONNECT_ISSUER_ID"],
+      key_content: ENV["APP_STORE_CONNECT_PRIVATE_KEY"]
+    )
+    match(type: "appstore", readonly: true)
+    increment_build_number(
+      xcodeproj: ENV["IOS_XCODEPROJ"] || "ios/App.xcodeproj"
+    )
     build_app(
       workspace: ENV["IOS_WORKSPACE"] || "App.xcworkspace",
       scheme: ENV["IOS_SCHEME"] || "App",
       export_method: "app-store"
     )
+    upload_to_testflight(skip_waiting_for_build_processing: true)
   end
 
-  desc "Build and upload to App Store Connect"
-  lane :appstore do
+  desc "Submit build to App Store"
+  lane :release do
+    app_store_connect_api_key(
+      key_id: ENV["APP_STORE_CONNECT_KEY_ID"],
+      issuer_id: ENV["APP_STORE_CONNECT_ISSUER_ID"],
+      key_content: ENV["APP_STORE_CONNECT_PRIVATE_KEY"]
+    )
+    match(type: "appstore", readonly: true)
     build_app(
       workspace: ENV["IOS_WORKSPACE"] || "App.xcworkspace",
       scheme: ENV["IOS_SCHEME"] || "App",
       export_method: "app-store"
     )
     upload_to_app_store
+  end
+end
+`;
+}
+
+function getAndroidFastfile() {
+  return `default_platform(:android)
+
+platform :android do
+  desc "Android CI checks/build"
+  lane :ci do
+    gradle(task: "clean", project_dir: "android")
+    gradle(task: "assembleDebug", project_dir: "android")
+  end
+
+  desc "Android beta artifact build"
+  lane :beta do
+    gradle(task: "assembleRelease", project_dir: "android")
+  end
+
+  desc "Android release artifact build"
+  lane :release do
+    gradle(task: "bundleRelease", project_dir: "android")
   end
 end
 `;
@@ -416,16 +707,15 @@ function getSecretsChecklist(options) {
   if (options.targets.ios) {
     recommended.push("IOS_SCHEME", "IOS_WORKSPACE");
     required.push(
-      "APPLE_API_KEY_ID",
-      "APPLE_API_ISSUER_ID",
-      "APPLE_API_KEY_BASE64",
-      "APPLE_ID",
-      "APPLE_TEAM_ID",
-      "APP_STORE_CONNECT_TEAM_ID",
-      "APPLE_APP_IDENTIFIER",
+      "APP_STORE_CONNECT_KEY_ID",
+      "APP_STORE_CONNECT_ISSUER_ID",
+      "APP_STORE_CONNECT_PRIVATE_KEY",
       "MATCH_GIT_URL",
-      "MATCH_PASSWORD"
+      "MATCH_PASSWORD",
+      "APPLE_APP_IDENTIFIER",
+      "APPLE_TEAM_ID"
     );
+    recommended.push("APP_STORE_CONNECT_TEAM_ID", "FASTLANE_USER");
   }
 
   if (options.notifications?.slack) required.push("SLACK_WEBHOOK_URL");
@@ -443,8 +733,8 @@ function getEnvExample(options) {
   }
   if (options.targets.ios) {
     lines.push("# iOS", "IOS_SCHEME=App", "IOS_WORKSPACE=ios/App.xcworkspace");
-    lines.push("APPLE_API_KEY_ID=", "APPLE_API_ISSUER_ID=", "APPLE_API_KEY_BASE64=");
-    lines.push("APPLE_ID=", "APPLE_TEAM_ID=", "APP_STORE_CONNECT_TEAM_ID=");
+    lines.push("APP_STORE_CONNECT_KEY_ID=", "APP_STORE_CONNECT_ISSUER_ID=", "APP_STORE_CONNECT_PRIVATE_KEY=");
+    lines.push("APPLE_ID=", "APPLE_TEAM_ID=", "APP_STORE_CONNECT_TEAM_ID=", "FASTLANE_USER=");
     lines.push("APPLE_APP_IDENTIFIER=com.example.app");
     lines.push("MATCH_GIT_URL=", "MATCH_PASSWORD=");
     lines.push("");
@@ -526,30 +816,6 @@ async function resolveTemplate() {
   return answers.template;
 }
 
-async function resolveCiProvider() {
-  const flagProvider = getFlagValue("ci-provider");
-  if (flagProvider) {
-    const normalized = flagProvider.toLowerCase();
-    if (["github", "bitrise", "codemagic"].includes(normalized)) return normalized;
-    throw new Error(`Unsupported --ci-provider value "${flagProvider}". Use github, bitrise, or codemagic.`);
-  }
-
-  const answers = await inquirer.prompt([
-    {
-      type: "list",
-      name: "ciProvider",
-      message: "Choose CI provider:",
-      choices: [
-        { name: "GitHub Actions", value: "github" },
-        { name: "Bitrise", value: "bitrise" },
-        { name: "Codemagic", value: "codemagic" }
-      ],
-      default: "github"
-    }
-  ]);
-  return answers.ciProvider;
-}
-
 async function resolveNotifications() {
   const fromFlags = {
     slack: hasFlag("notify-slack"),
@@ -561,16 +827,30 @@ async function resolveNotifications() {
     return fromFlags;
   }
 
+  const { enable } = await inquirer.prompt([
+    {
+      type: "confirm",
+      name: "enable",
+      message: "Do you want CI notifications when workflows finish or PRs merge (Slack, Discord, Microsoft Teams)?",
+      default: false
+    }
+  ]);
+
+  if (!enable) {
+    return { slack: false, discord: false, teams: false };
+  }
+
   const answers = await inquirer.prompt([
     {
       type: "checkbox",
       name: "channels",
-      message: "Add notification channels for push/PR merge/build status?",
+      message: "Which notification channels should be wired into GitHub Actions?",
       choices: [
-        { name: "Slack", value: "slack" },
+        { name: "Slack", value: "slack", checked: true },
         { name: "Discord", value: "discord" },
         { name: "Microsoft Teams", value: "teams" }
-      ]
+      ],
+      validate: (value) => (value.length > 0 ? true : "Select at least one channel.")
     }
   ]);
 
@@ -587,39 +867,28 @@ function validateAppPath(cwd, appPath, targets) {
   if (targets.ios && !fs.existsSync(path.join(root, "ios"))) throw new Error(`Selected app path "${appPath}" does not contain ios/`);
 }
 
-function writeScaffold(options) {
-  if (options.ciProvider === "github") {
-    if (options.targets.android) {
-      writeFileSafe(path.join(options.targetRoot, ".github/workflows/android.yml"), getAndroidWorkflow(options));
-    }
-    if (options.targets.ios) {
-      writeFileSafe(path.join(options.targetRoot, ".github/workflows/ios.yml"), getIosWorkflow(options));
-    }
+function writeGithubAutomatedScaffold(options) {
+  if (options.targets.android) {
+    writeFileSafe(path.join(options.targetRoot, ".github/workflows/android.yml"), getAndroidWorkflow(options));
   }
-  if (options.ciProvider === "bitrise") {
-    writeFileSafe(path.join(options.targetRoot, "bitrise.yml"), getBitriseConfig(options));
-  }
-  if (options.ciProvider === "codemagic") {
-    writeFileSafe(path.join(options.targetRoot, "codemagic.yaml"), getCodemagicConfig(options));
-  }
-
-  writeFileSafe(path.join(options.targetRoot, ".env.example"), getEnvExample(options));
-  writeFileSafe(path.join(options.targetRoot, ".env.production"), getEnvProduction(options));
-  writeFileSafe(path.join(options.targetRoot, "docs/github-secrets.md"), getSecretsGuide(options));
   if (options.targets.ios) {
-    writeFileSafe(path.join(options.targetRoot, "Gemfile"), getRootGemfile());
+    writeFileSafe(path.join(options.targetRoot, ".github/workflows/ios.yml"), getIosWorkflow(options));
+    ensureRootGemfileWithFastlane(options.targetRoot);
     writeFileSafe(path.join(options.targetRoot, "ios/fastlane/Fastfile"), getIosFastfile());
     writeFileSafe(path.join(options.targetRoot, "ios/fastlane/Appfile"), getIosAppfile());
     writeFileSafe(path.join(options.targetRoot, "ios/fastlane/Matchfile"), getIosMatchfile());
+  }
+  if (options.targets.android) {
+    writeFileSafe(path.join(options.targetRoot, "android/fastlane/Fastfile"), getAndroidFastfile());
   }
   writeFileSafe(
     path.join(options.targetRoot, CONFIG_FILE),
     `${JSON.stringify(
       {
-        version: 5,
+        version: 6,
         appPath: options.appPath,
         template: options.template,
-        ciProvider: options.ciProvider,
+        ciProvider: "github",
         targets: options.targets,
         notifications: options.notifications
       },
@@ -630,29 +899,86 @@ function writeScaffold(options) {
 }
 
 async function runInit() {
-  const cwd = process.cwd();
-  const appPath = await resolveAppPath(cwd);
-  const ciProvider = await resolveCiProvider();
-  const targets = await resolveTargets();
-  validateAppPath(cwd, appPath, targets);
-  const template = await resolveTemplate();
-  const notifications = await resolveNotifications();
-  const options = { appPath, targetRoot: path.join(cwd, appPath), ciProvider, template, targets, notifications };
-  writeScaffold(options);
+  const invocationDir = process.cwd();
+  const gitRoot = getGitTopLevel(invocationDir) || invocationDir;
+
+  const { branch } = await runStage("Stage 1/8: Repository and branch setup", () => resolveGitRemoteAndBranch(gitRoot));
+  console.log(`Using branch: ${branch}`);
+
+  const appPath = await runStage("Stage 2/8: Resolve app path", () => resolveAppPath(invocationDir));
+  const targets = await runStage("Stage 3/8: Choose platforms", () => resolveTargets());
+  await runStage("Stage 4/8: Validate app structure", () => validateAppPath(invocationDir, appPath, targets));
+  const template = await runStage("Stage 5/8: Select template", () => resolveTemplate());
+  const notifications = await runStage("Stage 6/8: Configure notifications", () => resolveNotifications());
+
+  const targetRoot = path.join(invocationDir, appPath);
+  const options = {
+    appPath,
+    targetRoot,
+    ciProvider: "github",
+    template,
+    targets,
+    notifications
+  };
+
+  await runStage("Stage 7/8: Generate workflows and Fastlane files", () => {
+    writeGithubAutomatedScaffold(options);
+  });
+
+  if (options.targets.ios || options.targets.android) {
+    if (hasFlag("skip-bundle")) {
+      console.log("\nSkipping bundle install (--skip-bundle).");
+    } else {
+      console.log("\nInstalling Ruby gems (Bundler) for Fastlane…");
+      runBundleInstallIfGemfile(targetRoot, "app root");
+      if (options.targets.ios) runBundleInstallIfGemfile(path.join(targetRoot, "ios"), "ios/");
+      if (options.targets.android) runBundleInstallIfGemfile(path.join(targetRoot, "android"), "android/");
+    }
+  }
+
+  if (options.targets.ios || options.targets.android) {
+    if (hasFlag("skip-fastlane")) {
+      console.log("\nSkipping Fastlane (--skip-fastlane).");
+    } else {
+      if (options.targets.ios) await runStage("iOS Fastlane setup and Match", () => runFastlaneIosSetup(targetRoot), true);
+      if (options.targets.android) await runStage("Android Fastlane setup", () => runFastlaneAndroidSetup(targetRoot), true);
+    }
+  }
+
+  if (hasFlag("skip-secrets")) {
+    console.log("\nSkipping GitHub Actions secrets (--skip-secrets).");
+  } else {
+    await runSecrets(targetRoot);
+  }
+
+  const relForCommit = [];
+  if (targets.android) {
+    relForCommit.push(path.relative(invocationDir, path.join(targetRoot, ".github", "workflows", "android.yml")));
+    relForCommit.push(path.relative(invocationDir, path.join(targetRoot, "android", "fastlane", "Fastfile")));
+  }
+  if (targets.ios) {
+    relForCommit.push(path.relative(invocationDir, path.join(targetRoot, ".github", "workflows", "ios.yml")));
+    relForCommit.push(path.relative(invocationDir, path.join(targetRoot, "Gemfile")));
+    for (const name of ["Fastfile", "Appfile", "Matchfile"]) {
+      relForCommit.push(path.relative(invocationDir, path.join(targetRoot, "ios", "fastlane", name)));
+    }
+  }
+  relForCommit.push(path.relative(invocationDir, path.join(targetRoot, CONFIG_FILE)));
+  const absForCommit = relForCommit.map((r) => path.resolve(invocationDir, r)).filter((p) => fs.existsSync(p));
+
+  await runStage("Stage 8/8: Commit and push generated files", () => {
+    gitAddCommitPush(gitRoot, absForCommit, "chore(ci): add GitHub Actions via rn-ci-setup");
+  }, true);
+
   console.log("\nSetup complete.");
   console.log(`App path: ${appPath}`);
-  console.log(`CI provider: ${ciProvider}`);
+  console.log(`Branch: ${branch}`);
   console.log(`Template: ${template}`);
   if (notifications.slack || notifications.discord || notifications.teams) {
-    const channels = ["slack", "discord", "teams"].filter((channel) => notifications[channel]).join(", ");
+    const channels = ["slack", "discord", "teams"].filter((ch) => notifications[ch]).join(", ");
     console.log(`Notifications: ${channels}`);
   }
-  console.log("Suggested next steps:");
-  console.log("1) Review generated CI files");
-  console.log("2) Add secrets listed in docs/github-secrets.md");
-  console.log("3) If using GitHub Actions, run rn-ci-setup secrets");
-  console.log("4) Run rn-ci-setup doctor");
-  console.log("5) Commit files and run a test push to main");
+  console.log("Optional: run `rn-ci-setup doctor` from the app directory to validate local env hints.");
 }
 
 function ensureGhAvailable() {
@@ -675,7 +1001,8 @@ function resolveGitHubRepo() {
   }
 }
 
-function getDoctorOptions(cwd) {
+function getDoctorOptions(explicitCwd) {
+  const cwd = explicitCwd !== undefined && explicitCwd !== null ? explicitCwd : process.cwd();
   const config =
     readJsonSafe(path.join(cwd, CONFIG_FILE)) ||
     {
@@ -695,8 +1022,8 @@ function getDoctorOptions(cwd) {
   };
 }
 
-async function runSecrets() {
-  const cwd = process.cwd();
+async function runSecrets(explicitCwd) {
+  const cwd = explicitCwd !== undefined && explicitCwd !== null ? explicitCwd : process.cwd();
   const options = getDoctorOptions(cwd);
   if (options.ciProvider !== "github") {
     throw new Error("`secrets` command is only supported when ciProvider is github.");
@@ -757,17 +1084,20 @@ function runDoctor() {
 function printHelp() {
   console.log(`rn-ci-setup CLI
 
+Automated init configures Git: remote/branch, GitHub Actions workflows, optional Slack/Discord/Teams
+job hooks, root Gemfile + ios/fastlane (iOS), bundle install, Fastlane lanes, gh secrets, then commit/push.
+
 Usage:
-  rn-ci-setup init [--ci-provider <github|bitrise|codemagic>] [--android] [--ios] [--expo|--bare] [--notify-slack] [--notify-discord] [--notify-teams] [--app-path <path>]
+  rn-ci-setup init [--android] [--ios] [--expo|--bare] [--notify-slack] [--notify-discord] [--notify-teams]
+                   [--app-path <path>] [--skip-bundle] [--skip-fastlane] [--skip-secrets] [--skip-push]
   rn-ci-setup secrets [--repo <owner/name>]
   rn-ci-setup doctor
 
 Examples:
-  npx rn-ci-setup init --ci-provider github --android --ios --notify-slack --notify-teams
-  npx rn-ci-setup init --ci-provider bitrise --android --ios
-  npx rn-ci-setup init --ci-provider codemagic --ios --app-path apps/mobile
+  npx rn-ci-setup init --android --ios --notify-slack
+  npx rn-ci-setup init --app-path apps/mobile --ios --skip-fastlane
   npx rn-ci-setup secrets
-  npx rn-ci-setup secrets --repo fazzysyed/rn-ci-setup
+  npx rn-ci-setup secrets --repo owner/repo
   npx rn-ci-setup doctor
 `);
 }
